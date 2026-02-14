@@ -80,58 +80,96 @@ const Dashboard = () => {
     const code = joinCode.trim().toUpperCase();
     if (!code) return;
 
+    console.log("🔍 Attempting to join room:", code);
     setJoining(true);
 
-    const { data: room, error } = await supabase
-      .from("rooms")
-      .select("*")
-      .eq("room_code", code)
-      .single();
+    try {
+      // Step 1: Try to find the room
+      console.log("📡 Querying room with code:", code);
+      const { data: room, error: roomError } = await supabase
+        .from("rooms")
+        .select("*")
+        .eq("room_code", code)
+        .single();
 
-    if (error || !room) {
-      toast.error("Room not found");
+      console.log("📊 Room query result:", { room, roomError });
+
+      if (roomError) {
+        console.error("❌ Room query error:", roomError);
+        toast.error(`Database error: ${roomError.message}`);
+        setJoining(false);
+        return;
+      }
+
+      if (!room) {
+        console.warn("⚠️ Room not found for code:", code);
+        toast.error("Room not found");
+        setJoining(false);
+        return;
+      }
+
+      console.log("✅ Room found:", room);
+
+      // Step 2: Check if room is locked
+      if (room.is_locked) {
+        console.warn("🔒 Room is locked");
+        toast.error("Room is locked");
+        setJoining(false);
+        return;
+      }
+
+      // Step 3: Check player count
+      console.log("👥 Checking player count for room:", room.id);
+      const { count, error: countError } = await supabase
+        .from("room_players")
+        .select("*", { count: "exact", head: true })
+        .eq("room_id", room.id);
+
+      if (countError) {
+        console.error("❌ Count query error:", countError);
+        toast.error(`Failed to check player count: ${countError.message}`);
+        setJoining(false);
+        return;
+      }
+
+      console.log("📊 Current player count:", count);
+
+      const maxP = (room.settings as any)?.max_players ?? 20;
+      if ((count ?? 0) >= maxP) {
+        console.warn("⚠️ Room is full:", { current: count, max: maxP });
+        toast.error("Room is full");
+        setJoining(false);
+        return;
+      }
+
+      // Step 4: Join or rejoin
+      console.log("➕ Attempting to add player to room...");
+      const { error: joinError } = await supabase.from("room_players").upsert(
+        {
+          room_id: room.id,
+          player_id: user.id,
+          join_order: (count ?? 0) + 1,
+          status: "connected",
+        },
+        { onConflict: "room_id,player_id" }
+      );
+
+      if (joinError) {
+        console.error("❌ Join error:", joinError);
+        toast.error(`Failed to join room: ${joinError.message}`);
+        setJoining(false);
+        return;
+      }
+
+      console.log("✅ Successfully joined room! Navigating...");
+      toast.success("Joined room successfully!");
       setJoining(false);
-      return;
-    }
-
-    if (room.is_locked) {
-      toast.error("Room is locked");
+      navigate(`/room/${code}`);
+    } catch (err) {
+      console.error("💥 Unexpected error in handleJoinRoom:", err);
+      toast.error(`Unexpected error: ${err instanceof Error ? err.message : 'Unknown error'}`);
       setJoining(false);
-      return;
     }
-
-    // Check player count
-    const { count } = await supabase
-      .from("room_players")
-      .select("*", { count: "exact", head: true })
-      .eq("room_id", room.id);
-
-    const maxP = (room.settings as any)?.max_players ?? 20;
-    if ((count ?? 0) >= maxP) {
-      toast.error("Room is full");
-      setJoining(false);
-      return;
-    }
-
-    // Join or rejoin
-    const { error: joinError } = await supabase.from("room_players").upsert(
-      {
-        room_id: room.id,
-        player_id: user.id,
-        join_order: (count ?? 0) + 1,
-        status: "connected",
-      },
-      { onConflict: "room_id,player_id" }
-    );
-
-    if (joinError) {
-      toast.error("Failed to join room");
-      setJoining(false);
-      return;
-    }
-
-    setJoining(false);
-    navigate(`/room/${code}`);
   };
 
   return (
